@@ -9,6 +9,8 @@ include(FeatureSummary)
 include(GNUInstallDirs)
 include(ECMUninstallTarget)
 
+option(ENABLE_TEST "Build test" On)
+
 find_package(Fcitx5Core ${REQUIRED_FCITX_VERSION} REQUIRED)
 find_package(Fcitx5Module REQUIRED COMPONENTS TestFrontend)
 find_package(Gettext REQUIRED)
@@ -22,6 +24,11 @@ add_subdirectory(po)
 add_subdirectory(bamboo)
 add_subdirectory(src)
 add_subdirectory(data)
+
+if (ENABLE_TEST)
+    enable_testing()
+    add_subdirectory(test)
+endif()
 
 fcitx5_translate_desktop_file(org.fcitx.Fcitx5.Addon.Bamboo.metainfo.xml.in
     org.fcitx.Fcitx5.Addon.Bamboo.metainfo.xml XML)

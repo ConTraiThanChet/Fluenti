@@ -10,6 +10,8 @@ package main
 import (
 	"bamboo-core"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type FcitxBambooEngine struct {
@@ -49,6 +51,7 @@ const (
 	FcitxBackSpace = 0xff08
 	FcitxSpace     = 0x020
 	FcitxTab       = 0xff09
+	FcitxEscape    = 0xff1b
 )
 
 func (e *FcitxBambooEngine) preeditProcessKeyEvent(keyVal uint32, state uint32) bool {
@@ -63,6 +66,14 @@ func (e *FcitxBambooEngine) preeditProcessKeyEvent(keyVal uint32, state uint32) 
 			// workaround for Chrome's address bar and Google SpreadSheets
 			return false
 		}
+	}
+
+	if keyVal == FcitxEscape {
+		if !isValidState(state) {
+			return false
+		}
+		e.commitPreeditAndReset("")
+		return true
 	}
 
 	if keyVal == FcitxBackSpace {
@@ -96,6 +107,19 @@ func (e *FcitxBambooEngine) preeditProcessKeyEvent(keyVal uint32, state uint32) 
 	}
 	e.updatePreedit(newText)
 	return isPrintableKey
+}
+
+func (e *FcitxBambooEngine) canProcessKey(keyVal, state uint32) bool {
+	return isValidState(state) &&
+		inKeyList(e.preeditor.GetInputMethod().Keys, unicode.ToLower(rune(keyVal)))
+}
+
+func (e *FcitxBambooEngine) restoreVisibleWord(word string) bool {
+	if word == "" || !utf8.ValidString(word) {
+		return false
+	}
+	e.restoreFromCommittedText(word)
+	return e.preeditText != ""
 }
 
 func (e *FcitxBambooEngine) expandMacro(str string) string {
@@ -201,4 +225,12 @@ func (e *FcitxBambooEngine) commitPreeditAndReset(s string) {
 	e.commitText = s
 	e.preeditText = ""
 	e.preeditor.Reset()
+}
+
+func (e *FcitxBambooEngine) restoreFromCommittedText(text string) {
+	e.commitPreeditAndReset("")
+	for _, keyRune := range text {
+		e.preeditor.ProcessKey(keyRune, bamboo.EnglishMode)
+	}
+	e.updatePreedit(e.getPreeditString())
 }

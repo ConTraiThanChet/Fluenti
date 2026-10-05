@@ -7,7 +7,9 @@
 
 #include "bamboo.h"
 #include "bambooconfig.h"
+#include "surroundingtracker.h"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <fcitx-config/iniparser.h>
@@ -35,7 +37,9 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 #include <fcitx/userinterfacemanager.h>
+#include <cctype>
 #include <fcntl.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -79,6 +83,47 @@ std::vector<std::string> convertToStringList(char **array) {
     }
     free(array);
     return result;
+}
+
+bool isValidEditState(uint32_t state) {
+    constexpr uint32_t controlMask = 1 << 2;
+    constexpr uint32_t mod1Mask = 1 << 3;
+    constexpr uint32_t superMask = 1 << 26;
+    constexpr uint32_t hyperMask = 1 << 27;
+    constexpr uint32_t metaMask = 1 << 28;
+    return (state & (controlMask | mod1Mask | superMask | hyperMask |
+                     metaMask)) == 0;
+}
+
+std::u32string toUCS4(std::string_view text) {
+    std::u32string result;
+    if (!utf8::validate(text)) {
+        return result;
+    }
+    auto iter = utf8::MakeUTF8CharIterator(text.begin(), text.end());
+    const auto end = utf8::MakeUTF8CharIterator(text.end(), text.end());
+    for (; iter != end; ++iter) {
+        result.push_back(static_cast<char32_t>(*iter));
+    }
+    return result;
+}
+
+std::string fromUCS4(const std::u32string &text) {
+    std::string result;
+    for (auto chr : text) {
+        result += utf8::UCS4ToUTF8(chr);
+    }
+    return result;
+}
+
+bamboo_reedit::TextView currentTextView(const SurroundingText &surroundingText) {
+    if (!surroundingText.isValid() ||
+        !utf8::validate(surroundingText.text())) {
+        return {};
+    }
+    return bamboo_reedit::makeTextView(toUCS4(surroundingText.text()),
+                                surroundingText.cursor(),
+                                surroundingText.anchor());
 }
 
 } // namespace
@@ -147,6 +192,10 @@ public:
             return;
         }
 
+        if (tryReeditPreviousWord(keyEvent)) {
+            return;
+        }
+
         if (keyEvent.key().checkKeyList(*engine_->config().restoreKeyStroke)) {
             EngineSetRestoreKeyStroke(bambooEngine_.handle());
             keyEvent.filterAndAccept();
@@ -157,41 +206,15 @@ public:
                                   keyEvent.rawKey().sym(),
                                   keyEvent.rawKey().states())) {
             keyEvent.filterAndAccept();
+        } else {
+            trackPassThroughKey(keyEvent.rawKey());
         }
 
-        if (char *commit = EnginePullCommit(bambooEngine_.handle())) {
-            if (commit[0]) {
-                ic_->commitString(commit);
-            }
-            free(commit);
-        }
-
-        ic_->inputPanel().reset();
-        UniqueCPtr<char> preedit(EnginePullPreedit(bambooEngine_.handle()));
-        if (preedit && preedit.get()[0]) {
-            std::string_view preeditView = preedit.get();
-            Text text;
-            TextFormatFlags format;
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit) &&
-                *engine_->config().displayUnderline) {
-                format = TextFormatFlag::Underline;
-            }
-            if (utf8::validate(preeditView)) {
-                text.append(std::string(preeditView), format);
-            }
-            text.setCursor(text.textLength());
-
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(text);
-            } else {
-                ic_->inputPanel().setPreedit(text);
-            }
-        }
-        ic_->updatePreedit();
-        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+        flushEngineOutput();
     }
 
     void reset() {
+        tracker_.unknownChange();
         ic_->inputPanel().reset();
         if (bambooEngine_) {
             ResetEngine(bambooEngine_.handle());
@@ -209,6 +232,7 @@ public:
             EngineCommitPreedit(bambooEngine_.handle());
             UniqueCPtr<char> commit(EnginePullCommit(bambooEngine_.handle()));
             if (commit && commit.get()[0]) {
+                tracker_.inserted(toUCS4(commit.get()));
                 ic_->commitString(commit.get());
             }
         }
@@ -216,10 +240,120 @@ public:
         ic_->updatePreedit();
     }
 
+    void surroundingTextUpdated() {
+        tracker_.clientUpdated(currentTextView(ic_->surroundingText()));
+    }
+
 private:
+    void trackPassThroughKey(const Key &key) {
+        if (key.isModifier()) {
+            return;
+        }
+        const auto states = static_cast<uint32_t>(key.states());
+        if (key.check(FcitxKey_BackSpace)) {
+            tracker_.backspaced();
+            return;
+        }
+        const auto chr = Key::keySymToUnicode(key.sym());
+        if (isValidEditState(states) && chr >= 0x20 && chr != 0x7f) {
+            tracker_.inserted(std::u32string(1, static_cast<char32_t>(chr)));
+            return;
+        }
+        tracker_.unknownChange();
+    }
+
+    void flushEngineOutput() {
+        if (char *commit = EnginePullCommit(bambooEngine_.handle())) {
+            if (commit[0]) {
+                tracker_.inserted(toUCS4(commit));
+                ic_->commitString(commit);
+            }
+            free(commit);
+        }
+
+        ic_->inputPanel().reset();
+        UniqueCPtr<char> preedit(EnginePullPreedit(bambooEngine_.handle()));
+        if (preedit && preedit.get()[0]) {
+            std::string_view preeditView = preedit.get();
+            Text text;
+            TextFormatFlags format;
+            if (*engine_->config().displayUnderline) {
+                format = TextFormatFlag::Underline;
+            }
+            if (utf8::validate(preeditView)) {
+                text.append(std::string(preeditView), format);
+            }
+            text.setCursor(text.textLength());
+
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(text);
+            } else {
+                ic_->inputPanel().setPreedit(text);
+            }
+        }
+        ic_->updatePreedit();
+        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+    }
+
+    // UniKey-style editing of an already committed word: when nothing is
+    // being composed and the cursor sits right after a word, pull that word
+    // back into the preedit. Any doubt (stale or unsupported surrounding
+    // text) makes this a no-op.
+    bool tryReeditPreviousWord(KeyEvent &keyEvent) {
+        if (!*engine_->config().editPreviousWord ||
+            EngineHasPreedit(bambooEngine_.handle()) ||
+            !ic_->capabilityFlags().test(CapabilityFlag::SurroundingText)) {
+            return false;
+        }
+        const auto sym = keyEvent.rawKey().sym();
+        const auto states = keyEvent.rawKey().states();
+        if (!isValidEditState(states)) {
+            return false;
+        }
+        const bool asciiLetter = (sym >= FcitxKey_a && sym <= FcitxKey_z) ||
+                                 (sym >= FcitxKey_A && sym <= FcitxKey_Z);
+        if (!asciiLetter &&
+            !EngineCanProcessKey(bambooEngine_.handle(), sym, states)) {
+            return false;
+        }
+
+        const auto *view = tracker_.verified();
+        if (!view || *view != currentTextView(ic_->surroundingText())) {
+            return false;
+        }
+        auto wordUcs4 = bamboo_reedit::wordEndingAtCursor(*view);
+        if (!wordUcs4) {
+            return false;
+        }
+        const auto word = fromUCS4(*wordUcs4);
+        const auto wordLength = wordUcs4->size();
+
+        if (!EngineRestoreWord(bambooEngine_.handle(), word.c_str())) {
+            ResetEngine(bambooEngine_.handle());
+            return false;
+        }
+        UniqueCPtr<char> restored(EnginePullPreedit(bambooEngine_.handle()));
+        if (!restored || word != restored.get()) {
+            ResetEngine(bambooEngine_.handle());
+            return false;
+        }
+        if (!EngineProcessKeyEvent(bambooEngine_.handle(), sym, states)) {
+            ResetEngine(bambooEngine_.handle());
+            return false;
+        }
+
+        tracker_.deletedBefore(wordLength);
+        ic_->deleteSurroundingText(-static_cast<int>(wordLength),
+                                   static_cast<int>(wordLength));
+        keyEvent.filterAndAccept();
+        flushEngineOutput();
+        return true;
+    }
+
     BambooEngine *engine_;
     InputContext *ic_;
     CGoObject bambooEngine_;
+    bamboo_reedit::SurroundingTracker tracker_;
 };
 
 BambooEngine::BambooEngine(Instance *instance)
@@ -330,6 +464,14 @@ BambooEngine::BambooEngine(Instance *instance)
 
     reloadConfig();
     instance_->inputContextManager().registerProperty("bambooState", &factory_);
+    surroundingTextWatcher_ = instance_->watchEvent(
+        EventType::InputContextSurroundingTextUpdated,
+        EventWatcherPhase::PostInputMethod, [this](Event &event) {
+            auto &icEvent = static_cast<InputContextEvent &>(event);
+            icEvent.inputContext()
+                ->propertyFor(&factory_)
+                ->surroundingTextUpdated();
+        });
 }
 
 void BambooEngine::reloadConfig() {

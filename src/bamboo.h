@@ -125,6 +125,7 @@ private:
     std::unique_ptr<SimpleAction> spellCheckAction_;
     std::unique_ptr<SimpleAction> macroAction_;
     std::vector<ScopedConnection> connections_;
+    std::unique_ptr<HandlerTableEntry<EventHandler>> surroundingTextWatcher_;
     CGoObject dictionary_;
 };
 

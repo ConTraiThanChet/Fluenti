@@ -1,0 +1,3 @@
+add_executable(testsurroundingtracker testsurroundingtracker.cpp)
+target_include_directories(testsurroundingtracker PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_test(NAME testsurroundingtracker COMMAND testsurroundingtracker)

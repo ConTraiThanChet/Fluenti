@@ -127,6 +127,10 @@ FCITX_CONFIGURATION(
                              _("Allow type with more freedom"), true};
     Option<bool> displayUnderline{this, "DisplayUnderline",
                                   _("Underline the preedit text"), true};
+    Option<bool> editPreviousWord{
+        this, "EditPreviousWord",
+        _("Continue editing the word before the cursor (needs surrounding text)"),
+        true};
     SubConfigOption custumKeymap{this, "CustomKeymap", _("Custom Keymap"),
                                  "fcitx://config/addon/bamboo/custom_keymap"};);
 } // namespace fcitx

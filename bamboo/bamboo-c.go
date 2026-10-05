@@ -49,6 +49,24 @@ func EngineProcessKeyEvent(engine uintptr, keyVal, state uint32) bool {
 	return bambooEngine.preeditProcessKeyEvent(keyVal, state)
 }
 
+//export EngineHasPreedit
+func EngineHasPreedit(engine uintptr) bool {
+	bambooEngine, ok := cgo.Handle(engine).Value().(*FcitxBambooEngine)
+	return ok && bambooEngine.preeditText != ""
+}
+
+//export EngineCanProcessKey
+func EngineCanProcessKey(engine uintptr, keyVal, state uint32) bool {
+	bambooEngine, ok := cgo.Handle(engine).Value().(*FcitxBambooEngine)
+	return ok && bambooEngine.canProcessKey(keyVal, state)
+}
+
+//export EngineRestoreWord
+func EngineRestoreWord(engine uintptr, word *C.cchar) bool {
+	bambooEngine, ok := cgo.Handle(engine).Value().(*FcitxBambooEngine)
+	return ok && bambooEngine.restoreVisibleWord(C.GoString(word))
+}
+
 //export EngineSetRestoreKeyStroke
 func EngineSetRestoreKeyStroke(engine uintptr) {
 	bambooEngine, ok := cgo.Handle(engine).Value().(*FcitxBambooEngine)
@@ -57,7 +75,6 @@ func EngineSetRestoreKeyStroke(engine uintptr) {
 	}
 	bambooEngine.shouldRestoreKeyStrokes = true
 }
-
 
 //export EnginePullPreedit
 func EnginePullPreedit(engine uintptr) *C.char {

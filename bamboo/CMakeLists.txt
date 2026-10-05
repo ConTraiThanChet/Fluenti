@@ -1,6 +1,7 @@
 
 file(GLOB BAMBOO_CORE_GO_SRCS bamboo-core/*.go)
 file(GLOB BAMBOO_GO_SRCS *.go)
+list(FILTER BAMBOO_GO_SRCS EXCLUDE REGEX "_test\\.go$")
 
 # Custom command for 'go build -buildmode=c-archive ...'
 # to create a library from Go codes.
